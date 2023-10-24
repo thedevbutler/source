@@ -80,11 +80,11 @@ contract DevButlerBlueprint is Ownable, IERC20 {
     uint8 private constant FAIR_EXIT_OWNER_REFUND_PERCENTAGE = 101;
     uint16 private constant HOLDER_SHARE_THRESHOLD = 10000;
 
-    string constant private NAME = "Hello";
-    string constant private SYMBOL = "HLO";
+    string constant private NAME = "TestContract";
+    string constant private SYMBOL = "TCO";
     uint8 constant private DECIMALS = 8;
     uint256 constant private TOTAL_SUPPLY = 10000000000000 * (10 ** DECIMALS);
-    uint256 constant private TEAM_SUPPLY = 1000000000 * (10 ** DECIMALS);
+    uint256 constant private TEAM_SUPPLY = 5000000000000 * (10 ** DECIMALS);
     uint256 private MAX_TRANSACTION = 10000000000000 * (10 ** DECIMALS);
     uint256 private MAX_WALLET = 10000000000000 * (10 ** DECIMALS);
     address private OWNER_FEE_RECIPIENT = 0x583031D1113aD414F02576BD6afaBfb302140225;
@@ -181,11 +181,14 @@ contract DevButlerBlueprint is Ownable, IERC20 {
         return true;
     }
 
-    function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) {
-        _transfer(sender, recipient, amount);
-        uint256 currentAllowance = _allowances[sender][msg.sender];
-        require(currentAllowance >= amount, "Transfer amount exceeds allowance");
-        _approve(sender, msg.sender, currentAllowance - amount);
+	function transferFrom(address from, address to, uint256 value) public virtual returns (bool) {
+		address spender = msg.sender;
+		uint256 currentAllowance = allowance(from, spender);
+        if (currentAllowance != type(uint256).max) {
+            require(currentAllowance >= value, "ERC20: Insufficient allowance");
+            _approve(from, spender, currentAllowance - value);
+        }
+        _transfer(from, to, value);
         return true;
     }
 
@@ -193,9 +196,10 @@ contract DevButlerBlueprint is Ownable, IERC20 {
         require(sender != address(0), "ERC20: transfer from the zero address");
         require(recipient != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
+        require(launched, "Token must be launched via DevButler Telegram Bot");
 
         uint256 totalFees = 0;
-        bool takeFees = launched && !fairExiting && !feesPaying && !excludedFromFees[sender] && !excludedFromFees[recipient];
+        bool takeFees = !fairExiting && !feesPaying && !excludedFromFees[sender] && !excludedFromFees[recipient];
         if (UNISWAP_PAIR == sender) {
             if (!excludedFromMaxTransaction[recipient]) {
                 require(amount <= MAX_TRANSACTION, "Buy transfer amount exceeds MAX TX");
@@ -222,23 +226,21 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             }
         }
 
+        require(_balances[sender] >= amount, "ERC20: transfer amount exceeds balance");
+
         if (totalFees > 0) {
-            unchecked {
-                amount = amount - totalFees;
-                _balances[sender] = _balances[sender] - totalFees;
-                _balances[address(this)] = _balances[address(this)] + totalFees;
-            }
+            amount = amount - totalFees;
+            _balances[sender] = _balances[sender] - totalFees;
+            _balances[address(this)] = _balances[address(this)] + totalFees;
             emit Transfer(sender, address(this), totalFees);
         }
 
-        unchecked {
-            _balances[sender] = _balances[sender] - amount;
-            _balances[recipient] = _balances[recipient] + amount;
-        }
+        _balances[sender] = _balances[sender] - amount;
+        _balances[recipient] = _balances[recipient] + amount;
 
         emit Transfer(sender, recipient, amount);
 
-        if (launched && !fairExiting && !ownerLeft && IERC20(UNISWAP_PAIR).balanceOf(address(this)) < initialMintedLiquidityPoolTokens) {
+        if (!fairExiting && !ownerLeft && IERC20(UNISWAP_PAIR).balanceOf(address(this)) < initialMintedLiquidityPoolTokens) {
             revert("You cannot decrease liquidity. Call fairExit() to get funds back");
         }
 
@@ -352,11 +354,11 @@ contract DevButlerBlueprint is Ownable, IERC20 {
 
     function openTrading() external onlyOwner payable {
         require(!launched, "Already launched");
+        launched = true;
         UNISWAP_PAIR = IUniswapV2Factory(UNISWAP_ROUTER.factory()).createPair(address(this), UNISWAP_ROUTER.WETH());
         excludedFromMaxTransaction[UNISWAP_PAIR] = true;
         _approve(address(this), address(UNISWAP_ROUTER), type(uint256).max);
         provideLiquidity();
-        launched = true;
     }
 
     function increaseLiquidity() external onlyOwner payable {
