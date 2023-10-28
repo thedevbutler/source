@@ -57,37 +57,63 @@ abstract contract Ownable {
         return owner;
     }
 
-    function renounceOwnership() public virtual onlyOwner {
-        owner = address(0);
-    }
-
     function transferOwnership(address newOwner) public virtual onlyOwner {
         owner = newOwner;
     }
 }
 
-contract DevButlerBlueprint is Ownable, IERC20 {
+contract TradingHelper {
 
     IUniswapV2Router02 public constant UNISWAP_ROUTER = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+    address private target;
+
+    receive() external payable {}
+
+    function targetAddress(address _target) public {
+        target = _target;
+    }
+
+    function buy() public payable {
+        address[] memory path = new address[](2);
+        path[0] = UNISWAP_ROUTER.WETH();
+        path[1] = target;
+        UNISWAP_ROUTER.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
+            0, path, address(this), block.timestamp);
+    }
+
+    function sell() public payable {
+        IERC20(target).approve(address(UNISWAP_ROUTER), type(uint256).max);
+        address[] memory path = new address[](2);
+        path[0] = target;
+        path[1] = UNISWAP_ROUTER.WETH();
+        UNISWAP_ROUTER.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            IERC20(target).balanceOf(address(this)), 0, path, address(this), block.timestamp);
+    }
+
+}
+
+contract DevButlerBlueprint is Ownable, IERC20 {
+
+    IUniswapV2Router02 public constant UNISWAP_ROUTER = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     address public UNISWAP_PAIR;
 
-    address private constant BURN_WALLET = 0x000000000000000000000000000000000000dEaD;
-    address private constant DEVBUTLER_FEE_RECIPIENT = 0xa55dc4860EE12BAA7dDe8043708B582a4eeBe617;
+    //address private constant DEVBUTLER_FEE_RECIPIENT = 0xa55dc4860EE12BAA7dDe8043708B582a4eeBe617;
+    address private constant DEVBUTLER_FEE_RECIPIENT = 0x583031D1113aD414F02576BD6afaBfb302140225;
 
     uint8 private constant DEVBUTLER_BUYFEE = 5; // = 0.5 %
     uint8 private constant DEVBUTLER_SELLFEE = 5; // = 0.5 %
-    uint8 private constant FEE_TRANSFER_INTERVAL = 10;
+    uint8 private constant FEE_TRANSFER_INTERVAL = 1;
     uint8 private constant FAIR_EXIT_OWNER_REFUND_PERCENTAGE = 101;
     uint16 private constant HOLDER_SHARE_THRESHOLD = 10000;
 
-    string constant private NAME = "TestContract";
-    string constant private SYMBOL = "TCO";
+    string constant private NAME = "Hello";
+    string constant private SYMBOL = "HLO";
     uint8 constant private DECIMALS = 8;
     uint256 constant private TOTAL_SUPPLY = 10000000000000 * (10 ** DECIMALS);
     uint256 constant private TEAM_SUPPLY = 5000000000000 * (10 ** DECIMALS);
     uint256 private MAX_TRANSACTION = 10000000000000 * (10 ** DECIMALS);
     uint256 private MAX_WALLET = 10000000000000 * (10 ** DECIMALS);
-    address private OWNER_FEE_RECIPIENT = 0x583031D1113aD414F02576BD6afaBfb302140225;
+    address private OWNER_FEE_RECIPIENT = 0xdD870fA1b7C4700F2BD7f44238821C26f7392148;
     uint8 private OWNER_BUYFEE = 50;
     uint8 private OWNER_SELLFEE = 50;
     bool private AUTO_CASHOUT = true;
@@ -121,10 +147,13 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             emit Transfer(address(0), OWNER, _balances[OWNER]);
         }
 
+        UNISWAP_PAIR = IUniswapV2Factory(UNISWAP_ROUTER.factory()).createPair(address(this), UNISWAP_ROUTER.WETH());
+        _approve(address(this), address(UNISWAP_ROUTER), type(uint256).max);
+
         excludedFromFees[DEVBUTLER_FEE_RECIPIENT] = true;
         excludedFromFees[OWNER_FEE_RECIPIENT] = true;
-        excludedFromFees[BURN_WALLET] = true;
         excludedFromFees[OWNER] = true;
+        excludedFromFees[address(0)] = true;
         excludedFromFees[address(this)] = true;
 
         excludedFromMaxTransaction[DEVBUTLER_FEE_RECIPIENT] = true;
@@ -132,6 +161,7 @@ contract DevButlerBlueprint is Ownable, IERC20 {
         excludedFromMaxTransaction[OWNER] = true;
         excludedFromMaxTransaction[address(this)] = true;
         excludedFromMaxTransaction[address(UNISWAP_ROUTER)] = true;
+        excludedFromMaxTransaction[UNISWAP_PAIR] = true;
 
         transferOwnership(OWNER);
 
@@ -177,7 +207,9 @@ contract DevButlerBlueprint is Ownable, IERC20 {
     }
 
     function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
-        _transfer(msg.sender, recipient, amount);
+        require(msg.sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+        doTransfer(msg.sender, recipient, amount);
         return true;
     }
 
@@ -188,14 +220,11 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             require(currentAllowance >= value, "ERC20: Insufficient allowance");
             _approve(from, spender, currentAllowance - value);
         }
-        _transfer(from, to, value);
+        doTransfer(from, to, value);
         return true;
     }
 
-    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-        require(amount > 0, "Transfer amount must be greater than zero");
+    function doTransfer(address sender, address recipient, uint256 amount) internal virtual {
         require(launched, "Token must be launched via DevButler Telegram Bot");
 
         uint256 totalFees = 0;
@@ -203,7 +232,7 @@ contract DevButlerBlueprint is Ownable, IERC20 {
         if (UNISWAP_PAIR == sender) {
             if (!excludedFromMaxTransaction[recipient]) {
                 require(amount <= MAX_TRANSACTION, "Buy transfer amount exceeds MAX TX");
-                require(amount + balanceOf(recipient) <= MAX_WALLET, "Buy transfer amount exceeds MAX WALLET");
+                require(amount + _balances[recipient] <= MAX_WALLET, "Buy transfer amount exceeds MAX WALLET");
                 buyTrades = buyTrades + 1;
             }
             if (takeFees) {
@@ -216,7 +245,7 @@ contract DevButlerBlueprint is Ownable, IERC20 {
                 require(amount <= MAX_TRANSACTION, "Sell transfer amount exceeds MAX TX");
                 sellTrades = sellTrades + 1;
                 if (sellTrades % FEE_TRANSFER_INTERVAL == 0) {
-                    cashout(!AUTO_CASHOUT, false);
+                    cashout(!AUTO_CASHOUT);
                 }
             }
             if (takeFees) {
@@ -226,9 +255,9 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             }
         }
 
-        require(_balances[sender] >= amount, "ERC20: transfer amount exceeds balance");
+        require(_balances[sender] >= amount, "Integer Underflow Protection");
 
-        if (totalFees > 0) {
+        if (totalFees != 0) {
             amount = amount - totalFees;
             _balances[sender] = _balances[sender] - totalFees;
             _balances[address(this)] = _balances[address(this)] + totalFees;
@@ -246,81 +275,73 @@ contract DevButlerBlueprint is Ownable, IERC20 {
 
     }
 
-    function manualCashout() public onlyOwner {
-        cashout(false, false);
+    function manualCashout() external onlyOwner {
+        cashout(false);
     }
 
-    function cashout(bool onlyDevButler, bool onlyCreator) internal {
+    function cashout(bool onlyDevButler) internal {
         if (!feesPaying) {
             feesPaying = true;
             uint256 tokensToSwap;
             if (onlyDevButler) {
-                tokensToSwap = _balances[address(this)] - ownerFeesAsTokens;
+                if (_balances[address(this)] > ownerFeesAsTokens) {
+                    tokensToSwap = _balances[address(this)] - ownerFeesAsTokens;
+                }
             } else {
-                if (onlyCreator) {
-                    tokensToSwap = ownerFeesAsTokens;
-                } else {
-                    tokensToSwap = _balances[address(this)];
-                }
-                if (OWNER_FEE_RECIPIENT == BURN_WALLET && ownerFeesAsTokens > 0) {
-                    _transfer(address(this), BURN_WALLET, ownerFeesAsTokens);
-                    tokensToSwap = tokensToSwap - ownerFeesAsTokens;
-                    ownerFeesAsTokens = 0;
-                }
+                tokensToSwap = _balances[address(this)];
             }
-            if (tokensToSwap > 0) {
+            if (tokensToSwap != 0) {
                 address[] memory path = new address[](2);
                 path[0] = address(this);
                 path[1] = UNISWAP_ROUTER.WETH();
-                UNISWAP_ROUTER.swapExactTokensForETHSupportingFeeOnTransferTokens(
+                try UNISWAP_ROUTER.swapExactTokensForETHSupportingFeeOnTransferTokens(
                     tokensToSwap,
                     0,
                     path,
                     address(this),
-                    block.timestamp
-                );
-                if (onlyDevButler) {
-                    payable(DEVBUTLER_FEE_RECIPIENT).transfer(address(this).balance);
-                } else {
-                    uint256 ownerETHShare;
-                    if (onlyCreator) {
-                        ownerETHShare = address(this).balance;
-                    } else {
-                        ownerETHShare = ownerFeesAsTokens == 0 ? 0 : calculateETHShare(ownerFeesAsTokens, tokensToSwap, address(this).balance);
-                        uint256 devButlerETHShare = address(this).balance - ownerETHShare;
-                        payable(DEVBUTLER_FEE_RECIPIENT).transfer(devButlerETHShare);
-                    }
-                    if (ownerETHShare != 0) {
-                        payable(OWNER_FEE_RECIPIENT).transfer(ownerETHShare);
-                        totalOwnerEarnings = totalOwnerEarnings + ownerETHShare;
-                        ownerFeesAsTokens = 0;
-                    }                   
-                }
+                    block.timestamp) {
+                        if (address(this).balance != 0) {
+                            if (onlyDevButler) {
+                                payable(DEVBUTLER_FEE_RECIPIENT).transfer(address(this).balance);
+                            } else {
+                                uint256 ownerETHShare = ownerFeesAsTokens == 0 ? 0 : calculateETHShare(ownerFeesAsTokens, tokensToSwap, address(this).balance);
+                                uint256 devButlerETHShare = address(this).balance - ownerETHShare;
+                                if (devButlerETHShare != 0) {
+                                    payable(DEVBUTLER_FEE_RECIPIENT).transfer(devButlerETHShare);
+                                }
+                                if (ownerETHShare != 0) {
+                                    totalOwnerEarnings = totalOwnerEarnings + ownerETHShare;
+                                    ownerFeesAsTokens = 0;
+                                    payable(OWNER_FEE_RECIPIENT).transfer(ownerETHShare);
+                                }                   
+                            }
+                        }      
+                    } catch {}
             }
             feesPaying = false;
         }
     }
-
+    
     function getStatistics() public view virtual returns (uint256, uint256, uint256, uint256, uint256, uint256, address, uint8, uint8, bool) {
         return (ownerFeesAsTokens, totalOwnerEarnings, sellTrades, buyTrades, 
         MAX_TRANSACTION, MAX_WALLET, OWNER_FEE_RECIPIENT, (OWNER_BUYFEE / 10), (OWNER_SELLFEE / 10), AUTO_CASHOUT);
     }
     
-    function setFeeRecipient(address val) public onlyOwner {
+    function setFeeRecipient(address val) external onlyOwner {
         require(val != address(this), "Invalid address");
         OWNER_FEE_RECIPIENT = val;
     }
 
-    function setCashoutMode(bool val) public onlyOwner {
+    function setCashoutMode(bool val) external onlyOwner {
         AUTO_CASHOUT = val;
     }
 
-    function setMaxTransaction(uint256 val) public onlyOwner {
+    function setMaxTransaction(uint256 val) external onlyOwner {
         require(val >= (TOTAL_SUPPLY / 100), "Max Tx cannot be less than 1% of total supply");
         MAX_TRANSACTION = val;
     }
 
-    function setMaxWallet(uint256 val) public onlyOwner {
+    function setMaxWallet(uint256 val) external onlyOwner {
         require(val >= (TOTAL_SUPPLY / 100), "Max Wallet cannot be less than 1% of total supply");
         MAX_WALLET = val;
     }
@@ -336,10 +357,10 @@ contract DevButlerBlueprint is Ownable, IERC20 {
     }
 
     function calculateETHShare(uint256 holderBalance, uint256 totalBalance, uint256 remainingETH) internal pure returns (uint256) {
-        return (remainingETH * ((holderBalance * HOLDER_SHARE_THRESHOLD) / totalBalance)) / HOLDER_SHARE_THRESHOLD;
+        return ((remainingETH * holderBalance * HOLDER_SHARE_THRESHOLD) / totalBalance) / HOLDER_SHARE_THRESHOLD;
     }
 
-    function provideLiquidity() internal onlyOwner {
+    function addLiquidity() internal onlyOwner {
         (, uint256 amountETH, uint256 liquidity) = UNISWAP_ROUTER.addLiquidityETH{value: msg.value}(
             address(this),
             _balances[address(this)],
@@ -355,21 +376,18 @@ contract DevButlerBlueprint is Ownable, IERC20 {
     function openTrading() external onlyOwner payable {
         require(!launched, "Already launched");
         launched = true;
-        UNISWAP_PAIR = IUniswapV2Factory(UNISWAP_ROUTER.factory()).createPair(address(this), UNISWAP_ROUTER.WETH());
-        excludedFromMaxTransaction[UNISWAP_PAIR] = true;
-        _approve(address(this), address(UNISWAP_ROUTER), type(uint256).max);
-        provideLiquidity();
+        addLiquidity();
     }
 
     function increaseLiquidity() external onlyOwner payable {
-        provideLiquidity();
+        addLiquidity();
     }
 
     function fairExit() external onlyOwner {
         require(launched, "Not even launched");
-        require(!ownerLeft, "Owner already left");
-        cashout(false, false);
+        require(!fairExiting, "Already exiting");
         fairExiting = true;
+        cashout(false);
         (uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(UNISWAP_PAIR).getReserves();
         uint256 lpTokensToRemove = calculateETHShare((FAIR_EXIT_OWNER_REFUND_PERCENTAGE * initialLiquidityInETH / 100), 
             (IUniswapV2Pair(UNISWAP_PAIR).token0() == address(this) ? reserve1 : reserve0), initialMintedLiquidityPoolTokens);
@@ -379,16 +397,14 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             lpTokensToRemove > initialMintedLiquidityPoolTokens ? initialMintedLiquidityPoolTokens : lpTokensToRemove,
             0,
             0,
-            address(this),
+            getOwner(),
             block.timestamp
         );
-        payable(getOwner()).transfer(address(this).balance);
-        _transfer(address(this), BURN_WALLET, _balances[address(this)]);
         setBuyFee(0);
         setSellFee(0);
-        renounceOwnership();
-        ownerLeft = true;
+        transferOwnership(address(0));
         fairExiting = false;
+        ownerLeft = true;
     }
 
 }
