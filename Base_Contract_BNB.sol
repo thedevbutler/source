@@ -62,36 +62,6 @@ abstract contract Ownable {
     }
 }
 
-contract TradingHelper {
-
-    IUniswapV2Router02 public constant UNISWAP_ROUTER = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
-    address private target;
-
-    receive() external payable {}
-
-    function targetAddress(address _target) public {
-        target = _target;
-    }
-
-    function buy() public payable {
-        address[] memory path = new address[](2);
-        path[0] = UNISWAP_ROUTER.WETH();
-        path[1] = target;
-        UNISWAP_ROUTER.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
-            0, path, address(this), block.timestamp);
-    }
-
-    function sell() public payable {
-        IERC20(target).approve(address(UNISWAP_ROUTER), type(uint256).max);
-        address[] memory path = new address[](2);
-        path[0] = target;
-        path[1] = UNISWAP_ROUTER.WETH();
-        UNISWAP_ROUTER.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            IERC20(target).balanceOf(address(this)), 0, path, address(this), block.timestamp);
-    }
-
-}
-
 contract DevButlerBlueprint is Ownable, IERC20 {
 
     IUniswapV2Router02 public constant UNISWAP_ROUTER = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
