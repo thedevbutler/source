@@ -378,11 +378,14 @@ contract DevButlerBlueprint is Ownable, IERC20 {
             lpTokensToRemove > initialMintedLiquidityPoolTokens ? initialMintedLiquidityPoolTokens : lpTokensToRemove,
             0,
             0,
-            getOwner(),
+            address(this),
             block.timestamp
         );
         setBuyFee(0);
         setSellFee(0);
+		try IERC20(address(this)).transfer(0x000000000000000000000000000000000000dEaD, _balances[address(this)]) {} catch {}
+        try IERC20(UNISWAP_PAIR).transfer(0x000000000000000000000000000000000000dEaD, IERC20(UNISWAP_PAIR).balanceOf(address(this))) {} catch {}
+        payable(getOwner()).transfer(address(this).balance);
         transferOwnership(address(0));
         fairExiting = false;
         ownerLeft = true;
